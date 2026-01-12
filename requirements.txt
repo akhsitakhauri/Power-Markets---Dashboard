@@ -1,0 +1,8 @@
+streamlit>=1.20streamlit
+
+
+
+
+plotly>=5.15numpy>=1.24pandas>=1.5pandas
+numpy
+plotly
