@@ -327,7 +327,7 @@ if hgp is not None:
         return caps
 
     # build capacities cache for unique (region, year) combos to avoid repeated lookups
-    caps_cache = {}
+    caps_cache: Dict[Tuple[Optional[str], Optional[int]], Dict[str, float]] = {}
 
     # Find duplicates groups
     if key_cols:
@@ -345,7 +345,6 @@ if hgp is not None:
         # for each row compute exceedance sum (sum of positive gen - cap across gen_cols)
         scores = []
         for idx, row in group.iterrows():
-            key = None
             region_val = row.get(region_col) if region_col else None
             year_val = int(row.get("Year")) if "Year" in row and not pd.isna(row.get("Year")) else (row.get("timestamp").year if pd.notna(row.get("timestamp")) else None)
             cache_key = (region_val, int(year_val) if year_val else None)
@@ -411,34 +410,77 @@ if hgp is not None:
     st.markdown("### Enforce capacity bounds on normalized data")
     enforce = st.checkbox("Clip generation values to installed capacity where capacity exists (cap to capacity) — recommended", value=True)
     normalized_clipped = normalized.copy()
-    if mic is not None and mic_year_cols:
-        # apply clipping row-wise where capacities known
-        clip_counts = 0
 
-        def clip_row_values(row):
-            nonlocal clip_counts
+    # Vectorized clipping approach using a capacities table per (Region, Year)
+    if mic is not None and mic_year_cols:
+        # build keys for each row in normalized_clipped: (region_val, year_val)
+        def _row_key(row):
             region_val = row.get(region_col) if region_col else None
-            year_val = int(row.get("Year")) if "Year" in row and not pd.isna(row.get("Year")) else (row.get("timestamp").year if pd.notna(row.get("timestamp")) else None)
+            year_val = None
+            if "Year" in row.index and not pd.isna(row.get("Year")):
+                try:
+                    year_val = int(row.get("Year"))
+                except Exception:
+                    year_val = None
+            if year_val is None and pd.notna(row.get("timestamp")):
+                try:
+                    year_val = int(row.get("timestamp").year)
+                except Exception:
+                    year_val = None
+            return (region_val, year_val)
+
+        key_series = normalized_clipped.apply(_row_key, axis=1)
+        unique_keys = list({k for k in key_series.tolist()})
+
+        # populate caps_cache for unique keys (if not already)
+        for region_val, year_val in unique_keys:
             cache_key = (region_val, int(year_val) if year_val else None)
             if cache_key in caps_cache:
-                caps = caps_cache[cache_key]
-            else:
-                caps = row_capacities_for_row(row)
-                caps_cache[cache_key] = caps
+                continue
+            caps = {}
             for g in gen_cols:
-                try:
-                    gen_val = float(row.get(g)) if pd.notna(row.get(g)) else 0.0
-                except Exception:
-                    gen_val = 0.0
-                cap = caps.get(g, np.nan)
-                if not pd.isna(cap) and gen_val > cap:
-                    row[g] = cap
-                    clip_counts += 1
-            return row
+                tk = map_gencol_to_type_key(g)
+                cap_mw = capacity_lookup(mic, region_val, tk, int(year_val) if year_val else 2021, mic_region_col, mic_type_col, mic_year_cols)
+                caps[g] = cap_mw
+            caps_cache[cache_key] = caps
 
+        # build capacities DataFrame to merge
+        caps_rows = []
+        for (region_val, year_val), caps in caps_cache.items():
+            row = {"_key_region": region_val, "_key_year": year_val}
+            for g in gen_cols:
+                row[f"cap__{g}"] = caps.get(g, np.nan)
+            caps_rows.append(row)
+        caps_df = pd.DataFrame(caps_rows)
+
+        # attach key columns to normalized_clipped for merge
+        key_cols_df = normalized_clipped.reset_index().rename(columns={"index": "_orig_index"})
+        key_cols_df["_key_region"] = key_series.apply(lambda t: t[0]).values
+        key_cols_df["_key_year"] = key_series.apply(lambda t: t[1]).values
+
+        merged = key_cols_df.merge(caps_df, on=["_key_region", "_key_year"], how="left")
+
+        # perform clipping
         if enforce:
-            normalized_clipped = normalized_clipped.apply(clip_row_values, axis=1)
-            st.write("Number of clipped generation values (est.):", clip_counts)
+            clip_counts_total = 0
+            for g in gen_cols:
+                gen_vals = pd.to_numeric(merged[g], errors="coerce").fillna(0.0)
+                cap_col = f"cap__{g}"
+                cap_vals = pd.to_numeric(merged[cap_col], errors="coerce")
+                # only clip where capacity is known (not NaN)
+                mask_known = cap_vals.notna()
+                # count clips
+                clipped_mask = mask_known & (gen_vals > cap_vals)
+                clip_counts_total += int(clipped_mask.sum())
+                # apply clip (where cap known, else keep original)
+                merged[g] = np.where(mask_known, np.minimum(gen_vals, cap_vals), gen_vals)
+            # restore order and drop helper cols
+            # reassign normalized_clipped from merged
+            cols_keep = [c for c in normalized_clipped.columns]
+            normalized_clipped = merged[cols_keep].set_index("_orig_index").sort_index().reset_index(drop=True)
+            st.write("Number of clipped generation values (est.):", clip_counts_total)
+        else:
+            st.info("Clipping is disabled — normalized dataset left unchanged.")
     else:
         st.info("Market_Installed_Capacity not provided or missing year columns — clipping unavailable.")
 
