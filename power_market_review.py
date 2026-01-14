@@ -425,7 +425,7 @@ if hgp is not None:
     # Show exceedances BEFORE normalization/clipping
     st.subheader("Pre-normalization capacity exceedances")
     st.write("All cases where generation exceeded installed capacity BEFORE duplicate resolution and clipping:")
-    pre_norm_exceedances = compute_excedances(hgp)
+    pre_norm_exceedances = compute_exceedances(hgp)
     if not pre_norm_exceedances.empty:
         st.dataframe(pre_norm_exceedances, use_container_width=True)
         st.write(f"Total exceedance cases found: {len(pre_norm_exceedances)}")
