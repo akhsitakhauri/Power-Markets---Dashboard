@@ -234,6 +234,26 @@ st.markdown("Interactive analysis of generation, capacity, utilization and price
             "Narratives next to charts explain assumptions and insights. Use the controls on the left to filter and tune analyses.")
 
 # -------------------------
+# Summary & Overview
+# -------------------------
+st.markdown("---")
+st.subheader("Summary & next steps")
+st.write(
+    "This interactive dashboard provides:\n"
+    "- Normalized hourly generation data with duplicate resolution and capacity checks.\n"
+    "- Visual tools to explore generation mix across time, utilization (capacity factors), and irregularities.\n"
+    "- Peak demand historical analysis and simple linear forecasts for 2030-2040.\n"
+    "- Monte Carlo price forecast demo based on hourly price seasonality + bootstrapped residuals.\n\n"
+    "To improve forecasts and analytics further, consider:\n"
+    "- Using a more sophisticated time-series model (SARIMA, Prophet, or state-space models) for prices.\n"
+    "- Incorporating more explicit marginal cost / merit-order data for dispatch ordering.\n"
+    "- Adding regional network constraints / interconnector details for net imports analysis.\n"
+    "- Validating types/tokens in Market_Installed_Capacity and enforcing a technology mapping table for robust capacity lookups."
+)
+st.caption("Developed as an interactive demo for power market research. For further customization, provide the actual spreadsheet and notes on any deviations in column names or technology type labels.")
+st.markdown("---")
+
+# -------------------------
 # Prepare primary sheets
 # -------------------------
 hgp = sheets.get("Hourly_Generation_Prices")
@@ -402,6 +422,16 @@ if hgp is not None:
     else:
         normalized = hgp.copy()
 
+    # Show exceedances BEFORE normalization/clipping
+    st.subheader("Pre-normalization capacity exceedances")
+    st.write("All cases where generation exceeded installed capacity BEFORE duplicate resolution and clipping:")
+    pre_norm_exceedances = compute_excedances(hgp)
+    if not pre_norm_exceedances.empty:
+        st.dataframe(pre_norm_exceedances, use_container_width=True)
+        st.write(f"Total exceedance cases found: {len(pre_norm_exceedances)}")
+    else:
+        st.info("No exceedances detected in raw data.")
+
     st.subheader("Normalized hourly data (duplicates resolved)")
     st.write("Preview of normalized data:")
     st.dataframe(normalized.head(200))
@@ -561,16 +591,69 @@ if hgp is not None:
     # Time-series visuals: generation mix and year/time filters
     # -------------------------
     st.header("Generation mix across time and by year")
-    with st.sidebar.expander("Time / Year selection"):
+    st.markdown("Explore generation supply and demand patterns. Use the controls below to filter by date, year, and visualization mode.")
+    
+    # Control Panel - organized layout
+    st.markdown("#### Visualization Controls")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown("**Time Period**")
         min_ts = export_df["timestamp"].min()
         max_ts = export_df["timestamp"].max()
-        st.write(f"Data range: {min_ts} — {max_ts}")
-        date_range = st.sidebar.date_input("Select date range", value=(min_ts.date() if pd.notna(min_ts) else None, max_ts.date() if pd.notna(max_ts) else None))
-        year_filter = st.sidebar.multiselect("Select years to include", options=sorted(export_df["timestamp"].dt.year.dropna().unique().tolist()), default=sorted(export_df["timestamp"].dt.year.dropna().unique().tolist()))
-        resample_freq = st.sidebar.selectbox("Resample frequency for visuals", options=["H", "D", "W", "M"], index=1)
-        stack_group_by_region = st.sidebar.checkbox("Stack area per region (if multiple regions)", value=False)
+        date_range = st.date_input(
+            "Select date range",
+            value=(min_ts.date() if pd.notna(min_ts) else None, max_ts.date() if pd.notna(max_ts) else None),
+            help=f"Data available from {min_ts.date() if pd.notna(min_ts) else 'N/A'} to {max_ts.date() if pd.notna(max_ts) else 'N/A'}"
+        )
+    
+    with col2:
+        st.markdown("**Years to Include**")
+        year_filter = st.multiselect(
+            "Select years",
+            options=sorted(export_df["timestamp"].dt.year.dropna().unique().tolist()),
+            default=sorted(export_df["timestamp"].dt.year.dropna().unique().tolist()),
+            help="Choose which years to display in the chart"
+        )
+    
+    with col3:
+        st.markdown("**Chart Settings**")
+        resample_freq = st.selectbox(
+            "Resample frequency",
+            options=[("Hourly", "H"), ("Daily", "D"), ("Weekly", "W"), ("Monthly", "M")],
+            index=1,
+            format_func=lambda x: x[0],
+            help="Adjust data granularity for clearer trends"
+        )
+        resample_freq = resample_freq[1]  # Extract the code part
+    
+    # Additional options
+    st.markdown("#### Display Options")
+    col_opt1, col_opt2 = st.columns(2)
+    
+    with col_opt1:
+        view_mode = st.radio(
+            "View mode",
+            options=["By Technology (default)", "By Region (stacked)"],
+            help="Choose how to visualize the data"
+        )
+        stack_group_by_region = (view_mode == "By Region (stacked)")
+    
+    if region_col and region_col in export_df.columns:
+        with col_opt2:
+            if not stack_group_by_region:
+                sel_region = st.selectbox(
+                    "Filter by region",
+                    options=["All regions"] + sorted(export_df[region_col].dropna().unique().tolist()),
+                    help="Select a specific region or view all regions"
+                )
+                sel_region_val = None if sel_region == "All regions" else sel_region
+            else:
+                st.markdown("**Region Stacking**")
+                st.info("📊 Showing aggregated generation by region")
+                sel_region_val = None
 
-    # filter by date range and year
+    # Apply filters
     df_vis = export_df.copy()
     if date_range and isinstance(date_range, tuple) and len(date_range) == 2:
         start, end = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
@@ -578,37 +661,94 @@ if hgp is not None:
     if year_filter:
         df_vis = df_vis[df_vis["timestamp"].dt.year.isin(year_filter)]
 
+    # Render chart based on view mode
+    st.markdown("---")
+    
     if stack_group_by_region and region_col and region_col in df_vis.columns:
-        # aggregate per region then stack by region (sum of all gen types)
-        st.write("Stacked area per region (generation mix across selected gen types).")
+        # Region stacking mode
+        st.markdown("### Generation by Region (Stacked)")
         agg = df_vis.set_index("timestamp").groupby(region_col)[gen_cols].resample(resample_freq).sum().reset_index()
-        # create stacked area per region: show total generation per region (sum of gen cols) or separate by gen type?
         agg["Total_MWh"] = agg[gen_cols].sum(axis=1, numeric_only=True)
-        fig = px.area(agg, x="timestamp", y="Total_MWh", color=region_col, line_group=region_col, title=f"Total generation by region ({resample_freq} resampled)")
-        st.plotly_chart(fig, use_container_width=True)
+        
+        if not agg.empty:
+            fig = px.area(agg, x="timestamp", y="Total_MWh", color=region_col, line_group=region_col, 
+                         title=f"Generation by Region ({resample_freq.upper()} aggregated)")
+            fig.update_layout(hovermode="x unified")
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Summary stats
+            col_stat1, col_stat2, col_stat3 = st.columns(3)
+            with col_stat1:
+                st.metric("Average Generation", f"{agg['Total_MWh'].mean():,.0f} MWh")
+            with col_stat2:
+                st.metric("Peak Generation", f"{agg['Total_MWh'].max():,.0f} MWh")
+            with col_stat3:
+                st.metric("Records Shown", f"{len(agg):,}")
+        else:
+            st.warning("⚠️ No data available for selected filters")
     else:
-        # stacked area for generation types across whole dataset (or filtered region)
-        st.write("Stacked area of generation mix by technology (selected gen types).")
-        if region_col and region_col in df_vis.columns:
-            # allow region selection for this visual
-            sel_region = st.selectbox("Region for generation mix", options=["All"] + sorted(df_vis[region_col].dropna().unique().tolist()))
-            if sel_region != "All":
-                df_vis_plot = df_vis[df_vis[region_col] == sel_region].copy()
+        # Technology mode (default)
+        st.markdown("### Generation Mix by Technology")
+        
+        if region_col and region_col in df_vis.columns and 'sel_region_val' in locals():
+            if sel_region_val:
+                df_vis_plot = df_vis[df_vis[region_col] == sel_region_val].copy()
+                chart_subtitle = f"Region: {sel_region_val}"
             else:
                 df_vis_plot = df_vis.copy()
+                chart_subtitle = "All regions combined"
         else:
             df_vis_plot = df_vis.copy()
+            chart_subtitle = ""
 
         if df_vis_plot.empty:
-            st.info("No data selected.")
+            st.warning("⚠️ No data available for selected filters")
         else:
-            g = df_vis_plot.set_index("timestamp")[gen_cols].resample(resample_freq).sum().fillna(0)
-            # stacked area by generation type
+            # Separate System Load from generation mix
+            load_col_name = next((c for c in gen_cols if "system" in c.lower()), None)
+            gen_cols_no_load = [c for c in gen_cols if c != load_col_name] if load_col_name else gen_cols
+            
+            # Plot generation mix (excluding System Load)
+            g_gen = df_vis_plot.set_index("timestamp")[gen_cols_no_load].resample(resample_freq).sum().fillna(0)
             fig = go.Figure()
-            for col in gen_cols:
-                fig.add_trace(go.Scatter(x=g.index, y=g[col], mode="lines", stackgroup="one", name=col))
-            fig.update_layout(title=f"Generation mix ({resample_freq} resampled)", xaxis_title="Date", yaxis_title="Generation (MWh)")
+            
+            for col in gen_cols_no_load:
+                fig.add_trace(go.Scatter(x=g_gen.index, y=g_gen[col], mode="lines", stackgroup="one", name=col))
+            
+            # Add System Load as separate line (not stacked)
+            if load_col_name:
+                g_load = df_vis_plot.set_index("timestamp")[[load_col_name]].resample(resample_freq).sum().fillna(0)
+                fig.add_trace(go.Scatter(x=g_load.index, y=g_load[load_col_name], mode="lines", name=load_col_name, 
+                                        line=dict(color="black", width=3, dash="dash"), hovertemplate="<b>System Load</b><br>%{x|%Y-%m-%d}<br>%{y:,.0f} MWh"))
+            
+            title_text = f"Generation Mix ({resample_freq.upper()} aggregated)"
+            if chart_subtitle:
+                title_text += f" — {chart_subtitle}"
+            
+            fig.update_layout(
+                title=title_text,
+                xaxis_title="Date",
+                yaxis_title="Energy (MWh)",
+                hovermode="x unified",
+                legend=dict(x=0.01, y=0.99, bgcolor="rgba(255,255,255,0.8)"),
+                height=500
+            )
             st.plotly_chart(fig, use_container_width=True)
+            
+            # Summary statistics
+            col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+            with col_stat1:
+                total_gen = g_gen.sum().sum()
+                st.metric("Total Generation", f"{total_gen:,.0f} MWh")
+            with col_stat2:
+                avg_gen = g_gen.sum(axis=1).mean()
+                st.metric("Average Hourly Generation", f"{avg_gen:,.0f} MWh")
+            with col_stat3:
+                if load_col_name:
+                    total_demand = g_load.sum().sum()
+                    st.metric("Total Demand", f"{total_demand:,.0f} MWh")
+            with col_stat4:
+                st.metric("Data Points", f"{len(g_gen):,}")
 
     # -------------------------
     # Utilization by market segment
@@ -899,22 +1039,3 @@ if mg is not None:
             st.error(f"Column '{category_col}' not found in grouped data. Available columns: {grouped.columns.tolist()}")
     else:
         st.info("Market_Generation missing category or supply columns.")
-
-# -------------------------
-# Footer / narrative
-# -------------------------
-st.markdown("---")
-st.subheader("Summary & next steps")
-st.write(
-    "This interactive dashboard provides:\n"
-    "- Normalized hourly generation data with duplicate resolution and capacity checks.\n"
-    "- Visual tools to explore generation mix across time, utilization (capacity factors), and irregularities.\n"
-    "- Peak demand historical analysis and simple linear forecasts for 2030-2040.\n"
-    "- Monte Carlo price forecast demo based on hourly price seasonality + bootstrapped residuals.\n\n"
-    "To improve forecasts and analytics further, consider:\n"
-    "- Using a more sophisticated time-series model (SARIMA, Prophet, or state-space models) for prices.\n"
-    "- Incorporating more explicit marginal cost / merit-order data for dispatch ordering.\n"
-    "- Adding regional network constraints / interconnector details for net imports analysis.\n"
-    "- Validating types/tokens in Market_Installed_Capacity and enforcing a technology mapping table for robust capacity lookups."
-)
-st.caption("Developed as an interactive demo for power market research. For further customization, provide the actual spreadsheet and notes on any deviations in column names or technology type labels.")
