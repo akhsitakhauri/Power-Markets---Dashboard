@@ -477,7 +477,8 @@ if hgp is not None:
             # restore order and drop helper cols
             # reassign normalized_clipped from merged
             cols_keep = [c for c in normalized_clipped.columns]
-            normalized_clipped = merged[cols_keep].set_index("_orig_index").sort_index().reset_index(drop=True)
+            cols_keep_with_index = cols_keep + ["_orig_index"]
+            normalized_clipped = merged[cols_keep_with_index].set_index("_orig_index").sort_index().reset_index(drop=True)
             st.write("Number of clipped generation values (est.):", clip_counts_total)
         else:
             st.info("Clipping is disabled — normalized dataset left unchanged.")
