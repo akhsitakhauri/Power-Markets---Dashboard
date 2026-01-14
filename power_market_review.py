@@ -888,10 +888,15 @@ if mg is not None:
     st.write("Detected category column:", category_col, "supply column:", supply_col)
     if category_col and supply_col:
         freq_mg = st.selectbox("Resample freq for Market_Generation", options=["D", "W", "M"], index=2)
-        tmp = mg.dropna(subset=["timestamp", category_col, supply_col]).set_index("timestamp")
+        tmp = mg.dropna(subset=["timestamp", category_col, supply_col]).copy()
+        tmp = tmp.set_index("timestamp")
         grouped = tmp.groupby(category_col)[supply_col].resample(freq_mg).sum().reset_index()
-        fig_mg = px.line(grouped, x="timestamp", y=supply_col, color=category_col, title="Market generation by category")
-        st.plotly_chart(fig_mg, use_container_width=True)
+        # Ensure column names are strings and exist
+        if category_col in grouped.columns:
+            fig_mg = px.line(grouped, x="timestamp", y=supply_col, color=category_col, title="Market generation by category")
+            st.plotly_chart(fig_mg, use_container_width=True)
+        else:
+            st.error(f"Column '{category_col}' not found in grouped data. Available columns: {grouped.columns.tolist()}")
     else:
         st.info("Market_Generation missing category or supply columns.")
 
