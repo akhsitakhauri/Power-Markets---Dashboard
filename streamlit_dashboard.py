@@ -159,18 +159,18 @@ if run_button and countries:
     col1, col2 = st.columns(2)
     with col1:
         fig1 = px.line(df.reset_index(), x='timestamp', y='demand_mw', title='Total Demand (MW)')
-        st.plotly_chart(fig1, use_container_width=True)
+        st.plotly_chart(fig1, width=None)
 
         # stacked generation
         gen_cols = [c for c in df.columns if c.endswith('_gen_mw')]
         gen_df = df[gen_cols].rename(columns=lambda x: x.replace('_gen_mw', ''))
         gen_df = gen_df.reset_index().melt(id_vars='timestamp', var_name='tech', value_name='mw')
         fig_area = px.area(gen_df, x='timestamp', y='mw', color='tech', title='Dispatched Generation by Tech (MW)')
-        st.plotly_chart(fig_area, use_container_width=True)
+        st.plotly_chart(fig_area, width=None)
 
     with col2:
         fig2 = px.line(df.reset_index(), x='timestamp', y='price_eur_per_mwh', title='Market Clearing Price (€/MWh)')
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width=None)
 
         # summary statistics
         st.metric('Average Price (€/MWh)', f"{df['price_eur_per_mwh'].mean():.1f}")

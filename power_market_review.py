@@ -41,6 +41,24 @@ from sklearn.metrics import r2_score
 
 st.set_page_config(layout="wide", page_title="GB Power Markets — Interactive Dashboard", initial_sidebar_state="expanded")
 
+# Set white background
+st.markdown(
+    """
+    <style>
+        .stApp {
+            background-color: white;
+        }
+        [data-testid="stAppViewContainer"] {
+            background-color: white;
+        }
+        [data-testid="stSidebar"] {
+            background-color: white;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 BUNDLED_FILENAME = "power_sample_data.xlsx"
 
 # -------------------------
@@ -52,9 +70,11 @@ def load_excel(io_bytes) -> Dict[str, pd.DataFrame]:
         sheets = pd.read_excel(io_bytes, sheet_name=None, engine="openpyxl")
     except Exception:
         sheets = pd.read_excel(io_bytes, sheet_name=None)
-    # normalize column names
+    # normalize column names and drop unnamed index columns
     for k, df in sheets.items():
         df.columns = [str(c).strip() for c in df.columns]
+        # Drop any unnamed index columns that may have been read from Excel
+        df = df.loc[:, ~df.columns.str.startswith('Unnamed')]
         sheets[k] = df
     return sheets
 
@@ -460,7 +480,7 @@ if hgp is not None:
     st.write("All cases where generation exceeded installed capacity BEFORE duplicate resolution and clipping:")
     pre_norm_exceedances = compute_exceedances(hgp)
     if not pre_norm_exceedances.empty:
-        st.dataframe(pre_norm_exceedances, use_container_width=True)
+        st.dataframe(pre_norm_exceedances, width=None)
         st.write(f"Total exceedance cases found: {len(pre_norm_exceedances)}")
     else:
         st.info("No exceedances detected in raw data.")
@@ -557,7 +577,7 @@ if hgp is not None:
         # plot aggregated exceedances by gen type
         ex_by_type = irregularities.groupby("GenType")["Exceed_MWh"].sum().reset_index().sort_values("Exceed_MWh", ascending=False)
         fig_ex = px.bar(ex_by_type, x="GenType", y="Exceed_MWh", title="Total hourly exceedances by generation type (MWh)")
-        st.plotly_chart(fig_ex, use_container_width=True)
+        st.plotly_chart(fig_ex, width=None)
     else:
         st.info("No exceedances detected (after selection/clipping).")
 
@@ -675,7 +695,7 @@ if hgp is not None:
             fig = px.area(agg, x="timestamp", y="Total_MWh", color=region_col, line_group=region_col, 
                          title=f"Generation by Region ({resample_freq.upper()} aggregated)")
             fig.update_layout(hovermode="x unified")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width=None)
             
             # Summary stats
             col_stat1, col_stat2, col_stat3 = st.columns(3)
@@ -689,7 +709,26 @@ if hgp is not None:
             st.warning("⚠️ No data available for selected filters")
     else:
         # Technology mode (default)
-        st.markdown("### Generation Mix by Technology")
+        st.markdown("### Generation Mix by Technology (Interactive Timeline)")
+        
+        # Time scroll for detailed exploration
+        if not df_vis.empty:
+            min_ts = df_vis["timestamp"].min()
+            max_ts = df_vis["timestamp"].max()
+            
+            col_scroll1, col_scroll2 = st.columns([3, 1])
+            with col_scroll1:
+                selected_time = st.slider(
+                    "Navigate through time",
+                    min_value=min_ts,
+                    max_value=max_ts,
+                    value=min_ts,
+                    step=pd.Timedelta(days=7),
+                    format="YYYY-MM-DD",
+                    help="Use this slider to navigate to a specific date in the dataset"
+                )
+            with col_scroll2:
+                st.metric("Selected Date", selected_time.strftime("%Y-%m-%d"))
         
         if region_col and region_col in df_vis.columns and 'sel_region_val' in locals():
             if sel_region_val:
@@ -734,7 +773,7 @@ if hgp is not None:
                 legend=dict(x=0.01, y=0.99, bgcolor="rgba(255,255,255,0.8)"),
                 height=500
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width=None)
             
             # Summary statistics
             col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
@@ -787,7 +826,7 @@ if hgp is not None:
         avg_util["GenType"] = avg_util["GenType_util"].str.replace("_util", "")
         st.subheader("Average utilization (capacity factor) by technology")
         fig_util = px.bar(avg_util.sort_values("Avg_util", ascending=False), x="GenType", y="Avg_util", labels={"Avg_util": "Average utilization (fraction)", "GenType": "Technology"})
-        st.plotly_chart(fig_util, use_container_width=True)
+        st.plotly_chart(fig_util, width=None)
     else:
         st.info("Market_Installed_Capacity sheet missing — utilization cannot be computed reliably.")
 
@@ -822,11 +861,11 @@ if hgp is not None:
             fig_peak = go.Figure()
             fig_peak.add_trace(go.Scatter(x=ann_peaks["Year"], y=ann_peaks[load_col], mode="markers+lines", name="Historical peaks"))
             fig_peak.add_trace(go.Scatter(x=years_future.flatten(), y=y_fore, mode="lines+markers", name="Linear forecast", line=dict(dash="dash")))
-            st.plotly_chart(fig_peak, use_container_width=True)
+            st.plotly_chart(fig_peak, width=None)
         else:
             st.info("Insufficient years for regression (need >=3 years). Displaying historical peaks only.")
             fig_peak = px.line(ann_peaks, x="Year", y=load_col, title="Annual peak demand (MWh)")
-            st.plotly_chart(fig_peak, use_container_width=True)
+            st.plotly_chart(fig_peak, width=None)
     else:
         st.info("No System Load column detected for peak demand analysis.")
 
@@ -885,7 +924,7 @@ if hgp is not None:
                         hovermode="x unified",
                         height=400
                     )
-                    st.plotly_chart(fig_hist_prof, use_container_width=True)
+                    st.plotly_chart(fig_hist_prof, width=None)
         
         with col_prof2:
             st.markdown("**Annual Peak Trend**")
@@ -904,7 +943,7 @@ if hgp is not None:
                 hovermode="x unified",
                 height=400
             )
-            st.plotly_chart(fig_peaks, use_container_width=True)
+            st.plotly_chart(fig_peaks, width=None)
         
         # Step 3: Linear regression for peak forecast
         if len(annual_peaks) >= 3:
@@ -988,7 +1027,7 @@ if hgp is not None:
                 height=500,
                 legend=dict(x=0.01, y=0.99, bgcolor="rgba(255,255,255,0.8)")
             )
-            st.plotly_chart(fig_forecast, use_container_width=True)
+            st.plotly_chart(fig_forecast, width=None)
             
             # Show forecast table
             with st.expander("📊 View all forecasted peaks (2030-2040)"):
@@ -999,7 +1038,7 @@ if hgp is not None:
                     "Forecasted Peak (MWh)": forecast_peaks_all,
                     "vs Latest Historical": forecast_peaks_all - latest_hist_peak if available_years else None
                 })
-                st.dataframe(forecast_table, use_container_width=True)
+                st.dataframe(forecast_table, width=None)
         else:
             st.warning("⚠️ Insufficient historical data (need ≥3 years) for linear regression forecast. Showing historical profiles only.")
     else:
@@ -1038,7 +1077,7 @@ if hgp is not None:
             dc = pd.DataFrame({"Tech": [c.replace("_num", "") for c in avg_caps.index], "Capture": avg_caps.values})
             dc = dc.sort_values("Capture", ascending=False)
             fig_disp = px.bar(dc, x="Tech", y="Capture", title="Proxy dispatch priority (higher capture assumed higher priority)")
-            st.plotly_chart(fig_disp, use_container_width=True)
+            st.plotly_chart(fig_disp, width=None)
         else:
             st.info("No numeric capture-like columns found in Annual_Price_Forecast (they may be strings).")
     else:
@@ -1108,11 +1147,11 @@ if hgp is not None:
             fig_mc.add_trace(go.Scatter(x=df_ens["timestamp"], y=df_ens["p10"], name="10th percentile", line=dict(color="lightgray")))
             fig_mc.add_trace(go.Scatter(x=df_ens["timestamp"], y=df_ens["p90"], name="90th percentile", line=dict(color="lightgray")))
             fig_mc.update_layout(title=f"Monte Carlo hourly price forecasts: {n_sims} sims, {n_years} years horizon", xaxis_title="Date", yaxis_title=f"{price_col}")
-            st.plotly_chart(fig_mc, use_container_width=True)
+            st.plotly_chart(fig_mc, width=None)
             # show distribution of annual means across sims
             annual_means = sims.reshape(n_sims, n_years, hours_per_year).mean(axis=2).mean(axis=1) if hours_per_year * n_years == sims.shape[1] else sims.mean(axis=1)
             fig_hist = px.histogram(annual_means, nbins=50, title="Distribution of mean price across simulations")
-            st.plotly_chart(fig_hist, use_container_width=True)
+            st.plotly_chart(fig_hist, width=None)
             st.write("Monte Carlo summary statistics (mean of simulated means):", np.mean(annual_means), "Std:", np.std(annual_means))
         else:
             st.info("Configure simulations and click 'Run Monte Carlo price forecast' to run.")
@@ -1139,7 +1178,7 @@ if mic is not None:
             fig = px.area(long_mic, x="Year_int", y="Capacity_GW", color=mic_type_col, facet_col=mic_region_col if mic_region_col else None, title="Installed capacity by technology (GW)")
         else:
             fig = px.line(long_mic.groupby("Year_int")["Capacity_GW"].sum().reset_index(), x="Year_int", y="Capacity_GW", title="Total installed capacity (GW)")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width=None)
     else:
         st.info("No year columns found for installed capacity (2021-2050 expected).")
 
@@ -1169,7 +1208,7 @@ if mg is not None:
         # Ensure column names are strings and exist
         if category_col in grouped.columns:
             fig_mg = px.line(grouped, x="timestamp", y=supply_col, color=category_col, title="Market generation by category")
-            st.plotly_chart(fig_mg, use_container_width=True)
+            st.plotly_chart(fig_mg, width=None)
         else:
             st.error(f"Column '{category_col}' not found in grouped data. Available columns: {grouped.columns.tolist()}")
     else:
