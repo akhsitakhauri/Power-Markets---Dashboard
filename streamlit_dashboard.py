@@ -11,7 +11,7 @@ st.title("European Power Market — Supply, Demand & Pricing Model")
 
 st.markdown(
     """
-    Simple interactive model to explore how generation mix, demand and marginal costs
+    Interactive model to explore generation mix, demand and marginal costs
     determine hourly market clearing prices in a simplified European market.
     The app uses a synthetic demand and availability profile so it runs without external data.
     """
