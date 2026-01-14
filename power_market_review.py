@@ -691,26 +691,7 @@ if hgp is not None:
             st.warning("⚠️ No data available for selected filters")
     else:
         # Technology mode (default)
-        st.markdown("### Generation Mix by Technology (Interactive Timeline)")
-        
-        # Time scroll for detailed exploration
-        if not df_vis.empty:
-            min_ts = df_vis["timestamp"].min()
-            max_ts = df_vis["timestamp"].max()
-            
-            col_scroll1, col_scroll2 = st.columns([3, 1])
-            with col_scroll1:
-                selected_time = st.slider(
-                    "Navigate through time",
-                    min_value=min_ts,
-                    max_value=max_ts,
-                    value=min_ts,
-                    step=pd.Timedelta(days=7),
-                    format="YYYY-MM-DD",
-                    help="Use this slider to navigate to a specific date in the dataset"
-                )
-            with col_scroll2:
-                st.metric("Selected Date", selected_time.strftime("%Y-%m-%d"))
+        st.markdown("### Generation Mix by Technology")
         
         if region_col and region_col in df_vis.columns and 'sel_region_val' in locals():
             if sel_region_val:
