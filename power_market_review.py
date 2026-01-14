@@ -830,43 +830,177 @@ if hgp is not None:
         st.info("No System Load column detected for peak demand analysis.")
 
     # -------------------------
-    # Hourly profile scaling using peak forecast
+    # Hourly demand profile using peak forecast
     # -------------------------
-    st.header("Interactive hourly demand profile using peak forecasts")
-    st.write("We create an average hourly demand profile (fractional distribution across 24 hours), then scale it to forecasted peak demand to show expected hourly profile.")
-    # compute average hourly profile from historical data
+    st.header("Hourly demand profile & forecast (2030-2040)")
+    st.markdown("Analyze the daily demand pattern based on historical data, then project demand profiles for future years using linear regression.")
+    
     if "timestamp" in export_df.columns and (("System Load (MWh)" in gen_cols) or safe_col(export_df, "system load")):
         load_col = next(c for c in gen_cols if "system" in c.lower())
         tmp = export_df.dropna(subset=["timestamp", load_col]).copy()
-        tmp["hour"] = tmp["timestamp"].dt.hour
-        avg_by_hour = tmp.groupby("hour")[load_col].mean().reset_index()
-        avg_by_hour["fraction"] = avg_by_hour[load_col] / avg_by_hour[load_col].sum()
-        st.write("Average hourly distribution (fraction of daily total):")
-        st.dataframe(avg_by_hour)
-        # allow user to pick forecast year and show scaled hourly profile
-        if len(ann_peaks) >= 3:
-            years_to_show = list(range(2021, 2051))
-            sel_year = st.selectbox("Select forecast year for hourly profile (uses linear peak forecast if selected)", options=[2025, 2030, 2035, 2040], index=1)
-            # if regression exists, use lr prediction for that year; else use historical peak median
-            if 'lr' in locals():
-                peak_for_year = lr.predict(np.array([[sel_year]]))[0]
-            else:
-                peak_for_year = ann_peaks[load_col].median()
-            # we interpret peak as maximum hourly System Load. Scale hourly fractions so maximum equals peak_for_year:
-            profile = avg_by_hour.copy()
-            # scale such that max(profile*scale) == peak_for_year
-            scale = peak_for_year / profile[load_col].max()
-            profile["Scaled_MWh"] = profile[load_col] * scale
-            fig_prof = px.line(profile, x="hour", y="Scaled_MWh", title=f"Estimated hourly demand profile scaled to peak {sel_year} = {peak_for_year:.1f} MWh")
-            st.plotly_chart(fig_prof, use_container_width=True)
+        
+        # Step 1: Calculate annual peaks
+        tmp["Year"] = tmp["timestamp"].dt.year
+        annual_peaks = tmp.groupby("Year")[load_col].max().reset_index().sort_values("Year")
+        
+        # Step 2: Calculate hourly profile for each year
+        tmp["Hour"] = tmp["timestamp"].dt.hour
+        hourly_profiles_by_year = tmp.groupby(["Year", "Hour"])[load_col].mean().reset_index()
+        
+        # Merge peaks with hourly data
+        hourly_profiles_by_year = hourly_profiles_by_year.merge(annual_peaks, on="Year", suffixes=("", "_peak"))
+        hourly_profiles_by_year["Deviation_from_Peak"] = hourly_profiles_by_year[load_col] - hourly_profiles_by_year[load_col + "_peak"]
+        
+        st.markdown("#### Historical Hourly Demand Profile")
+        
+        col_prof1, col_prof2 = st.columns(2)
+        
+        with col_prof1:
+            st.markdown("**Select Historical Year**")
+            available_years = sorted(annual_peaks["Year"].unique().tolist())
+            if available_years:
+                hist_year_sel = st.selectbox("View hourly profile for year:", options=available_years, index=len(available_years)-1)
+                
+                hist_profile = hourly_profiles_by_year[hourly_profiles_by_year["Year"] == hist_year_sel].copy()
+                hist_peak = annual_peaks[annual_peaks["Year"] == hist_year_sel][load_col].values[0]
+                
+                if not hist_profile.empty:
+                    fig_hist_prof = go.Figure()
+                    fig_hist_prof.add_trace(go.Scatter(
+                        x=hist_profile["Hour"],
+                        y=hist_profile[load_col],
+                        mode="lines+markers",
+                        name="Hourly Load",
+                        line=dict(color="steelblue", width=2),
+                        fill="tozeroy"
+                    ))
+                    fig_hist_prof.add_hline(y=hist_peak, line_dash="dash", line_color="red", 
+                                           annotation_text=f"Annual Peak: {hist_peak:,.0f} MWh",
+                                           annotation_position="right")
+                    fig_hist_prof.update_layout(
+                        title=f"Hourly Demand Profile - {hist_year_sel}",
+                        xaxis_title="Hour of Day",
+                        yaxis_title="Demand (MWh)",
+                        hovermode="x unified",
+                        height=400
+                    )
+                    st.plotly_chart(fig_hist_prof, use_container_width=True)
+        
+        with col_prof2:
+            st.markdown("**Annual Peak Trend**")
+            fig_peaks = go.Figure()
+            fig_peaks.add_trace(go.Scatter(
+                x=annual_peaks["Year"],
+                y=annual_peaks[load_col],
+                mode="markers+lines",
+                name="Historical Peaks",
+                marker=dict(size=8, color="darkblue")
+            ))
+            fig_peaks.update_layout(
+                title="Annual Peak Demand Trend",
+                xaxis_title="Year",
+                yaxis_title="Peak Demand (MWh)",
+                hovermode="x unified",
+                height=400
+            )
+            st.plotly_chart(fig_peaks, use_container_width=True)
+        
+        # Step 3: Linear regression for peak forecast
+        if len(annual_peaks) >= 3:
+            X_train = annual_peaks[["Year"]].values
+            y_train = annual_peaks[load_col].values
+            
+            lr = LinearRegression()
+            lr.fit(X_train, y_train)
+            r2 = r2_score(y_train, lr.predict(X_train))
+            
+            st.markdown("#### Peak Demand Forecast Statistics")
+            col_stats1, col_stats2, col_stats3 = st.columns(3)
+            with col_stats1:
+                st.metric("Trend Slope", f"{lr.coef_[0]:+.2f} MWh/year")
+            with col_stats2:
+                st.metric("R² Score", f"{r2:.3f}")
+            with col_stats3:
+                st.metric("Historical Avg", f"{y_train.mean():,.0f} MWh")
+            
+            # Step 4: Generate forecast profiles for 2030-2040
+            st.markdown("#### Forecasted Hourly Demand Profiles (2030-2040)")
+            st.write("Use the slider below to explore estimated hourly demand patterns for future years based on linear regression of historical peaks.")
+            
+            forecast_years = list(range(2030, 2041))
+            selected_forecast_year = st.slider(
+                "Select forecast year",
+                min_value=2030,
+                max_value=2040,
+                value=2030,
+                step=1,
+                help="Slide to see how hourly demand profile changes across forecast years"
+            )
+            
+            # Calculate forecast peak
+            forecast_peak = lr.predict(np.array([[selected_forecast_year]]))[0]
+            
+            # Use historical hourly pattern (normalized) and scale by forecast peak
+            hist_hourly_avg = tmp.groupby("Hour")[load_col].mean().reset_index()
+            hist_peak_overall = hist_hourly_avg[load_col].max()
+            
+            # Normalize historical pattern
+            hist_hourly_avg["Normalized"] = hist_hourly_avg[load_col] / hist_peak_overall
+            
+            # Scale to forecast peak
+            hist_hourly_avg["Forecasted"] = hist_hourly_avg["Normalized"] * forecast_peak
+            
+            # Create forecast visualization
+            fig_forecast = go.Figure()
+            
+            fig_forecast.add_trace(go.Scatter(
+                x=hist_hourly_avg["Hour"],
+                y=hist_hourly_avg["Forecasted"],
+                mode="lines+markers",
+                name=f"Forecast {selected_forecast_year}",
+                line=dict(color="darkorange", width=3),
+                fill="tozeroy"
+            ))
+            
+            # Add reference line for latest historical year
+            if available_years:
+                latest_hist_peak = annual_peaks[annual_peaks["Year"] == available_years[-1]][load_col].values[0]
+                latest_hist_profile = tmp[tmp["Year"] == available_years[-1]].groupby("Hour")[load_col].mean()
+                fig_forecast.add_trace(go.Scatter(
+                    x=latest_hist_profile.index,
+                    y=latest_hist_profile.values,
+                    mode="lines",
+                    name=f"Latest Historical ({available_years[-1]})",
+                    line=dict(color="steelblue", width=2, dash="dash"),
+                    opacity=0.7
+                ))
+            
+            fig_forecast.add_hline(y=forecast_peak, line_dash="dash", line_color="red",
+                                  annotation_text=f"Forecasted Peak: {forecast_peak:,.0f} MWh",
+                                  annotation_position="right")
+            
+            fig_forecast.update_layout(
+                title=f"Forecasted Hourly Demand Profile - {selected_forecast_year}",
+                xaxis_title="Hour of Day (0-23)",
+                yaxis_title="Demand (MWh)",
+                hovermode="x unified",
+                height=500,
+                legend=dict(x=0.01, y=0.99, bgcolor="rgba(255,255,255,0.8)")
+            )
+            st.plotly_chart(fig_forecast, use_container_width=True)
+            
+            # Show forecast table
+            with st.expander("📊 View all forecasted peaks (2030-2040)"):
+                forecast_years_all = np.arange(2030, 2041).reshape(-1, 1)
+                forecast_peaks_all = lr.predict(forecast_years_all)
+                forecast_table = pd.DataFrame({
+                    "Year": forecast_years_all.flatten(),
+                    "Forecasted Peak (MWh)": forecast_peaks_all,
+                    "vs Latest Historical": forecast_peaks_all - latest_hist_peak if available_years else None
+                })
+                st.dataframe(forecast_table, use_container_width=True)
         else:
-            st.info("Insufficient annual data for peak forecasting — using historic median peak for scaling.")
-            peak_for_year = tmp[load_col].max()
-            profile = avg_by_hour.copy()
-            scale = peak_for_year / profile[load_col].max()
-            profile["Scaled_MWh"] = profile[load_col] * scale
-            fig_prof = px.line(profile, x="hour", y="Scaled_MWh", title=f"Estimated hourly demand profile scaled to recent peak")
-            st.plotly_chart(fig_prof, use_container_width=True)
+            st.warning("⚠️ Insufficient historical data (need ≥3 years) for linear regression forecast. Showing historical profiles only.")
     else:
         st.info("Cannot compute hourly demand profile (missing System Load or timestamp).")
 
