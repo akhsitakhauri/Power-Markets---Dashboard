@@ -1,4 +1,4 @@
-# European Power Market — Streamlit Demo
+# Power Market — Streamlit Demo
 
 This repository contains a simple Streamlit app that models a synthetic European power market.
 
