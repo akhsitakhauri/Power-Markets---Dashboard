@@ -349,6 +349,39 @@ if hgp is not None:
     # build capacities cache for unique (region, year) combos to avoid repeated lookups
     caps_cache: Dict[Tuple[Optional[str], Optional[int]], Dict[str, float]] = {}
 
+    # Function to compute irregularities for a dataframe
+    def compute_exceedances(df_in: pd.DataFrame) -> pd.DataFrame:
+        records = []
+        for idx, row in df_in.iterrows():
+            region_val = row.get(region_col) if region_col else None
+            year_val = int(row.get("Year")) if "Year" in row and not pd.isna(row.get("Year")) else (row.get("timestamp").year if pd.notna(row.get("timestamp")) else None)
+            cache_key = (region_val, int(year_val) if year_val else None)
+            if cache_key in caps_cache:
+                caps = caps_cache[cache_key]
+            else:
+                caps = row_capacities_for_row(row)
+                caps_cache[cache_key] = caps
+            for g in gen_cols:
+                gen_val = pd.to_numeric(row.get(g), errors="coerce")
+                if pd.isna(gen_val):
+                    continue
+                cap = caps.get(g, np.nan)
+                if pd.isna(cap):
+                    continue
+                exceed = gen_val - cap
+                if exceed > 0:
+                    records.append({
+                        "index": idx,
+                        "timestamp": row.get("timestamp"),
+                        "Region": region_val,
+                        "Year": year_val,
+                        "GenType": g,
+                        "Generation_MWh": gen_val,
+                        "Capacity_MW": cap,
+                        "Exceed_MWh": exceed
+                    })
+        return pd.DataFrame(records)
+
     # Find duplicates groups
     if key_cols:
         dup_groups = hgp.duplicated(subset=key_cols, keep=False)
@@ -516,38 +549,6 @@ if hgp is not None:
         st.info("Market_Installed_Capacity not provided or missing year columns — clipping unavailable.")
 
     st.subheader("Irregularities: hourly generation > installed capacity")
-    # compute irregularities for normalized (or raw) full set to display where gen > capacity
-    def compute_exceedances(df_in: pd.DataFrame) -> pd.DataFrame:
-        records = []
-        for idx, row in df_in.iterrows():
-            region_val = row.get(region_col) if region_col else None
-            year_val = int(row.get("Year")) if "Year" in row and not pd.isna(row.get("Year")) else (row.get("timestamp").year if pd.notna(row.get("timestamp")) else None)
-            cache_key = (region_val, int(year_val) if year_val else None)
-            if cache_key in caps_cache:
-                caps = caps_cache[cache_key]
-            else:
-                caps = row_capacities_for_row(row)
-                caps_cache[cache_key] = caps
-            for g in gen_cols:
-                gen_val = pd.to_numeric(row.get(g), errors="coerce")
-                if pd.isna(gen_val):
-                    continue
-                cap = caps.get(g, np.nan)
-                if pd.isna(cap):
-                    continue
-                exceed = gen_val - cap
-                if exceed > 0:
-                    records.append({
-                        "index": idx,
-                        "timestamp": row.get("timestamp"),
-                        "Region": region_val,
-                        "Year": year_val,
-                        "GenType": g,
-                        "Generation_MWh": gen_val,
-                        "Capacity_MW": cap,
-                        "Exceed_MWh": exceed
-                    })
-        return pd.DataFrame(records)
 
     irregularities = compute_exceedances(normalized if not enforce else normalized_clipped)
     st.write(f"Irregular records found (generation > capacity): {len(irregularities)}")
